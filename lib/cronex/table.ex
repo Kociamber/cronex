@@ -4,10 +4,9 @@ defmodule Cronex.Table do
   """
 
   use GenServer
-
   import Cronex.Job
-
   alias Cronex.Job
+  require Logger
 
   # Interface functions
   @doc """
@@ -96,6 +95,8 @@ defmodule Cronex.Table do
     {:noreply, new_state}
   end
 
+  def return_pid(), do: self()
+
   defp raise_scheduler_not_provided_error do
     raise ArgumentError,
       message: """
@@ -107,17 +108,22 @@ defmodule Cronex.Table do
       """
   end
 
+  # take first node from the list and tries to make it leader
   defp try_become_leader(%{scheduler: scheduler} = state) do
+    [leader | tail] = node_list = Application.get_env(:cronex, :node_list, [Node.self()])
+    leader_table_pid = :rpc.call(leader, __MODULE__, :return_pid, [])
+    Logger.info("Cronex leader node: #{inspect(leader)}, pid: #{inspect(leader_table_pid)}")
+
     trans_result =
       :global.trans(
-        {:leader, self()},
+        {:leader, leader_table_pid},
         fn ->
-          case GenServer.multi_call(Node.list(), scheduler.table, :new_leader) do
+          case GenServer.multi_call(tail, scheduler.table, :new_leader) do
             {_, []} -> :ok
             _ -> :aborted
           end
         end,
-        Node.list([:this, :visible]),
+        node_list,
         0
       )
 
