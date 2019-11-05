@@ -6,7 +6,6 @@ defmodule Cronex.Table do
   use GenServer
   import Cronex.Job
   alias Cronex.Job
-  require Logger
 
   # Interface functions
   @doc """
@@ -108,22 +107,19 @@ defmodule Cronex.Table do
       """
   end
 
-  # take first node from the list and tries to make it leader
   defp try_become_leader(%{scheduler: scheduler} = state) do
-    [leader | tail] = node_list = Application.get_env(:cronex, :node_list, [Node.self()])
-    leader_table_pid = :rpc.call(leader, __MODULE__, :return_pid, [])
-    Logger.info("Cronex leader node: #{inspect(leader)}, pid: #{inspect(leader_table_pid)}")
+    node_list = filter_out_nodes(Node.list(), Application.get_env(:cronex, :exclude_nodes))
 
     trans_result =
       :global.trans(
-        {:leader, leader_table_pid},
+        {:leader, self()},
         fn ->
-          case GenServer.multi_call(tail, scheduler.table, :new_leader) do
+          case GenServer.multi_call(node_list, scheduler.table, :new_leader) do
             {_, []} -> :ok
             _ -> :aborted
           end
         end,
-        node_list,
+        Node.list([:this, :visible]),
         0
       )
 
@@ -131,6 +127,16 @@ defmodule Cronex.Table do
       :ok -> Map.put(state, :leader, true)
       :aborted -> Map.put(state, :leader, false)
     end
+  end
+
+  defp filter_out_nodes(node_list, nil), do: node_list
+
+  defp filter_out_nodes(node_list, nodes_to_exclude) do
+    Enum.reject(node_list, fn node ->
+      node
+      |> Atom.to_string()
+      |> String.contains?(nodes_to_exclude)
+    end)
   end
 
   defp do_add_job(state, %Job{} = job) do
